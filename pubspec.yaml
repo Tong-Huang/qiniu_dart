@@ -1,0 +1,10 @@
+name: qiniu_dart
+description: Qiniu Dart UpLoader
+version: 1.0.0+1
+environment:
+  sdk: ">=2.2.2 <3.0.0"
+
+dependencies:
+  dio: ^2.1.7
+  uuid: ^2.0.2
+  mime: ^0.9.6+3
