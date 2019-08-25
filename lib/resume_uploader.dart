@@ -9,73 +9,84 @@ import 'package:mime/mime.dart';
 import 'package:path/path.dart';
 import 'package:uuid/uuid.dart';
 
+class FileInfo {
+  String domain;
+  File file;
+  String path;
+  int size;
+  String mime;
+  String ext;
+  String name;
+  Map<String, String> params;
+
+  FileInfo({
+    this.domain,
+    this.file,
+    this.path,
+    this.size,
+    this.mime,
+    this.ext,
+    this.name,
+    this.params,
+  });
+}
+
 class QiniuUploader {
   final Uuid uuid = Uuid();
   final Dio dio = Dio();
-  final String domain = 'http://upload-z2.qiniup.com';
+  static const int BLOCK_SIZE = 4 * 1024 * 1024; //4MB, never change
+  final String domain; //z2 client upload domain
 
-  Future<void> formUpload(String token, String key, String filePath) async {
-    final File file = File(filePath);
-    if (!file.existsSync())
-      throw Exception('[QiniuUploader] putFile() file no exists');
-    final int size = file.lengthSync();
-    final String mimeType = lookupMimeType(filePath);
-    final String ext = extension(filePath);
-    final String fileName = uuid.v4() + ext;
+  QiniuUploader({this.domain = 'http://upload-z2.qiniup.com'});
 
+  Future<void> formUpload(String token, String fileKey, String filePath) async {
+    final FileInfo fileInfo = _generateFileInfo(filePath, fileKey);
+
+    print('| formUpload');
     print('| path => $filePath');
-    print('| size => $size');
-    print('| mime => $mimeType');
-    print('| name => $fileName');
-    print('| key => $key');
+    print('| size => ${fileInfo.size}');
+    print('| mime => ${fileInfo.mime}');
+    print('| name => ${fileInfo.name}');
+    print('| key => $fileKey');
     print('| _ _ _ _ _ _ _ _ _ _ _ _ _');
 
-    const String url = 'http://upload-z2.qiniup.com';
     final FormData formData = FormData();
-    formData.add('file', UploadFileInfo(file, fileName));
-    // formData.add('key', fileName);
-    formData.add('key', key);
+    formData.add('file', UploadFileInfo(fileInfo.file, fileInfo.name));
+    formData.add('key', fileInfo.name);
     formData.add('token', token);
-    final response = await dio.post(url, data: formData,
+    // TODO(thuang): handler params.
+    final response = await dio.post(domain, data: formData,
         onSendProgress: (int current, int total) {
       print('[formUpload] $current/$total');
     });
     print('response => $response');
   }
 
-  Future<void> resumeUpload(String token, String key, String filePath) async {
-    final File file = File(filePath);
-    if (!file.existsSync())
-      throw Exception('[QiniuUploader] putFile() file no exists');
-    final int fileSize = file.lengthSync();
-    final String mimeType = lookupMimeType(filePath);
-    final String ext = extension(filePath);
-    final String fileName = uuid.v4() + ext;
-
+  Future<void> resumeUpload(
+      String token, String fileKey, String filePath) async {
+    final FileInfo fileInfo = _generateFileInfo(filePath, fileKey);
+    print('| formUpload');
     print('| path => $filePath');
-    print('| size => $fileSize');
-    print('| mime => $mimeType');
-    print('| name => $fileName');
-    print('| key => $key');
+    print('| size => ${fileInfo.size}');
+    print('| mime => ${fileInfo.mime}');
+    print('| name => ${fileInfo.name}');
+    print('| key => $fileKey');
     print('| _ _ _ _ _ _ _ _ _ _ _ _ _');
 
     int readLen = 0;
     int bufferLen = 0;
-    int currentBlock = 0;
-    int finishedBlock = 0;
     List<int> remainedData = [];
     List<int> readBuffers = [];
     final List<String> finishedCtxList = [];
     final List<String> finishedBlkPutRets = [];
-
     StreamSubscription streamSubscription;
-    const int BLOCK_SIZE = 4 * 1024 * 1024; //4MB, never change
-    streamSubscription = file.openRead().listen((chunk) async {
+
+    streamSubscription = fileInfo.file.openRead().listen((chunk) async {
       readLen += chunk.length;
       bufferLen += chunk.length;
       readBuffers.addAll(chunk);
 
-      if (bufferLen >= BLOCK_SIZE || readLen == fileSize) {
+      if (bufferLen >= BLOCK_SIZE || readLen == fileInfo.size) {
         streamSubscription.pause();
         int blockSize = BLOCK_SIZE - remainedData.length;
         blockSize = min(bufferLen, blockSize);
@@ -85,10 +96,8 @@ class QiniuUploader {
 
         // something reset
         remainedData = readBuffers.sublist(blockSize);
-        bufferLen = bufferLen - BLOCK_SIZE;
+        bufferLen = bufferLen - blockSize;
         readBuffers = [];
-
-        currentBlock += 1;
 
         final int bodyCrc32 = Crc32Zlib().convert(postData);
         final Response response = await _mkblk(domain, token, postData);
@@ -105,19 +114,39 @@ class QiniuUploader {
           streamSubscription.cancel();
           throw Exception('CRC32 no match.');
         }
-
-        finishedBlock += 1;
         finishedCtxList.add(ctx);
         finishedBlkPutRets.add(jsonEncode(response.data));
         streamSubscription.resume();
       }
     }, onDone: () async {
-      print('finish read file size => $bufferLen');
-      // TODO(thuang): check remain buffer and buffer, deal with more than block size case.
-
-      // streamSubscription.cancel();
-      await _mkfile(domain, token, fileSize, finishedCtxList, key);
+      final Response response = await _mkfile(
+          domain, token, fileInfo.size, finishedCtxList, fileInfo.name);
+      if (response == null) {
+        streamSubscription.cancel();
+        throw Exception('No Response');
+      }
+      finishedBlkPutRets.add(jsonEncode(response.data));
+      print(response.data);
     });
+  }
+
+  FileInfo _generateFileInfo(String path, String fileKey) {
+    final File file = File(path);
+    if (!file.existsSync())
+      throw Exception('[QiniuUploader] putFile() file no exists');
+    final int size = file.lengthSync();
+    final String mime = lookupMimeType(path);
+    final String ext = extension(path);
+    final String name = fileKey ?? uuid.v4() + ext;
+    final FileInfo fileInfo = FileInfo(
+        domain: domain,
+        file: file,
+        size: size,
+        path: path,
+        mime: mime,
+        ext: ext,
+        name: name);
+    return fileInfo;
   }
 
   Future<Response> _mkblk(String domain, String token, List<int> data) async {
@@ -125,9 +154,9 @@ class QiniuUploader {
       final String url = '$domain/mkblk/${data.length}';
       final String auth = 'UpToken $token';
       final headers = {
-        'Authorization': auth,
-        'Content-Type': 'application/octet-stream',
-        'Connection': 'keep-alive',
+        HttpHeaders.authorizationHeader: auth,
+        HttpHeaders.contentTypeHeader: 'application/octet-stream',
+        HttpHeaders.connectionHeader: 'keep-alive',
         HttpHeaders.contentLengthHeader: data.length
       };
       final Response response = await dio.post(url,
@@ -148,9 +177,9 @@ class QiniuUploader {
       final String auth = 'UpToken $token';
       final String postBody = ctxList.join(',');
       final headers = {
-        'Authorization': auth,
-        'Content-Type': 'application/octet-stream',
-        'Connection': 'keep-alive',
+        HttpHeaders.authorizationHeader: auth,
+        HttpHeaders.contentTypeHeader: 'application/octet-stream',
+        HttpHeaders.connectionHeader: 'keep-alive',
         HttpHeaders.contentLengthHeader: postBody.length
       };
       final Response response = await dio.post(url,
