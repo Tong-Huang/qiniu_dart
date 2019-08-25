@@ -14,9 +14,8 @@ class FileInfo {
   File file;
   String path;
   int size;
-  String mime;
+  String mimeType;
   String ext;
-  String name;
   Map<String, String> params;
   String hash;
   String key;
@@ -24,11 +23,11 @@ class FileInfo {
   FileInfo({
     this.domain,
     this.file,
+    this.key,
     this.path,
     this.size,
-    this.mime,
+    this.mimeType,
     this.ext,
-    this.name,
     this.params,
   });
 }
@@ -38,25 +37,18 @@ class QiniuUploader {
   final Dio dio = Dio();
   static const int BLOCK_SIZE = 4 * 1024 * 1024; //4MB, never change
   final String domain; //z2 client upload domain
+  String token;
 
-  QiniuUploader({this.domain = 'http://upload-z2.qiniup.com'});
+  QiniuUploader({this.domain = 'http://upload-z2.qiniup.com', this.token});
 
-  Future<void> formUpload(String token, String fileKey, String filePath) async {
+  Future<void> formUpload(String fileKey, String filePath,
+      {Map<String, String> params}) async {
     final FileInfo fileInfo = _generateFileInfo(filePath, fileKey);
-
-    print('| formUpload');
-    print('| path => $filePath');
-    print('| size => ${fileInfo.size}');
-    print('| mime => ${fileInfo.mime}');
-    print('| name => ${fileInfo.name}');
-    print('| key => $fileKey');
-    print('| _ _ _ _ _ _ _ _ _ _ _ _ _');
-
-    final FormData formData = FormData();
-    formData.add('file', UploadFileInfo(fileInfo.file, fileInfo.name));
-    formData.add('key', fileInfo.name);
+    FormData formData = FormData();
+    formData.add('file', UploadFileInfo(fileInfo.file, fileInfo.key));
+    formData.add('key', fileInfo.key);
     formData.add('token', token);
-    // TODO(thuang): handler params.
+    formData = _handleParams(params, formData: formData);
     final response = await dio.post(domain, data: formData,
         onSendProgress: (int current, int total) {
       print('[formUpload] $current/$total');
@@ -64,16 +56,9 @@ class QiniuUploader {
     print('response => $response');
   }
 
-  Future<void> resumeUpload(
-      String token, String fileKey, String filePath) async {
+  Future<void> resumeUpload(String fileKey, String filePath,
+      {Map<String, String> params}) async {
     final FileInfo fileInfo = _generateFileInfo(filePath, fileKey);
-    print('| formUpload');
-    print('| path => $filePath');
-    print('| size => ${fileInfo.size}');
-    print('| mime => ${fileInfo.mime}');
-    print('| name => ${fileInfo.name}');
-    print('| key => $fileKey');
-    print('| _ _ _ _ _ _ _ _ _ _ _ _ _');
 
     int readLen = 0;
     final List<int> readBuffers = [];
@@ -111,13 +96,13 @@ class QiniuUploader {
         streamSubscription.resume();
       }
     }, onDone: () async {
-      final Response response = await _mkfile(
-          domain, token, fileInfo.size, finishedCtxList, fileInfo.name);
+      final Response response = await _mkfile(fileInfo, finishedCtxList);
       if (response == null) {
         streamSubscription.cancel();
         throw Exception('No Response');
       }
-      print(response.data);
+      final String hash = response.data['hash'];
+      fileInfo.hash = hash;
     });
   }
 
@@ -126,17 +111,17 @@ class QiniuUploader {
     if (!file.existsSync())
       throw Exception('[QiniuUploader] putFile() file no exists');
     final int size = file.lengthSync();
-    final String mime = lookupMimeType(path);
+    final String mimeType = lookupMimeType(path);
     final String ext = extension(path);
-    final String name = fileKey ?? uuid.v4() + ext;
+    final String key = fileKey ?? uuid.v4() + ext;
     final FileInfo fileInfo = FileInfo(
         domain: domain,
         file: file,
         size: size,
         path: path,
-        mime: mime,
+        mimeType: mimeType,
         ext: ext,
-        name: name);
+        key: key);
     return fileInfo;
   }
 
@@ -160,11 +145,16 @@ class QiniuUploader {
     }
   }
 
-  Future<Response> _mkfile(String domain, String token, int fileSize,
-      List<String> ctxList, String key) async {
+  Future<Response> _mkfile(FileInfo fileInfo, List<String> ctxList,
+      {Map<String, String> params}) async {
     try {
-      String url = '$domain/mkfile/$fileSize';
-      url += '/key/' + _urlsafeBase64Encode(key);
+      String url = '$domain';
+      url += '/mkfile/${fileInfo.size}';
+      url += '/key/${_urlsafeBase64Encode(fileInfo.key)}';
+      url += '/mimeType/${_urlsafeBase64Encode(fileInfo.mimeType)}';
+      if (params != null) {
+        url = _handleParams(params);
+      }
       final String auth = 'UpToken $token';
       final String postBody = ctxList.join(',');
       final headers = {
@@ -188,5 +178,19 @@ class QiniuUploader {
     return base64Str
         .replaceAll(RegExp(r'\/'), '_')
         .replaceAll(RegExp(r'\+'), '-');
+  }
+
+  _handleParams(Map<String, String> params, {String uri, FormData formData}) {
+    params.forEach((String key, String value) {
+      if (key.startsWith('x:')) {
+        if (uri != null) {
+          uri += '/$key/${_urlsafeBase64Encode(value)}';
+        } else if (formData != null) {
+          formData.add(key, value);
+        }
+      }
+    });
+    if (uri != null) return uri;
+    if (formData != null) return formData;
   }
 }
