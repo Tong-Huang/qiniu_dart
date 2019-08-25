@@ -1,3 +1,10 @@
 # assets
 /assets/*
 !/assets/.gitkeep
+
+# ignore env file
+env.yaml
+
+# ignore .dart_tool .packages
+.dart_tool
+.packages

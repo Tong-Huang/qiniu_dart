@@ -8,3 +8,5 @@ dependencies:
   dio: ^2.1.7
   uuid: ^2.0.2
   mime: ^0.9.6+3
+  path: ^1.6.4
+  yaml: ^2.1.15
