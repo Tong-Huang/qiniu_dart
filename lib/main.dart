@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' show join, current;
+import 'package:qiniu_dart/file_info.dart';
 import 'package:yaml/yaml.dart';
 import 'package:qiniu_dart/resume_uploader.dart';
 
@@ -13,8 +15,12 @@ Future<void> main(args) async {
   final QiniuUploader qiniuUploader = QiniuUploader(token: token);
 
   // final String imagePath = join(current, 'assets/lexus-lx570.jpg');
-  // await qiniuUploader.formUpload('lexus-lx570.jpg', imagePath);
+  // final FileInfo fileInfo =
+  //     await qiniuUploader.formUpload('lexus-lx570.jpg', imagePath);
 
   final String videoPath = join(current, 'assets/screenrecord.mp4');
-  await qiniuUploader.resumeUpload('screenrecord.mp4', videoPath);
+  FileInfo fileInfo =
+      await qiniuUploader.resumeUpload('screenrecord.mp4', videoPath);
+
+  print(fileInfo.toJson());
 }

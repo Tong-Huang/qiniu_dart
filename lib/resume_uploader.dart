@@ -9,28 +9,7 @@ import 'package:mime/mime.dart';
 import 'package:path/path.dart';
 import 'package:uuid/uuid.dart';
 
-class FileInfo {
-  String domain;
-  File file;
-  String path;
-  int size;
-  String mimeType;
-  String ext;
-  Map<String, String> params;
-  String hash;
-  String key;
-
-  FileInfo({
-    this.domain,
-    this.file,
-    this.key,
-    this.path,
-    this.size,
-    this.mimeType,
-    this.ext,
-    this.params,
-  });
-}
+import 'file_info.dart';
 
 class QiniuUploader {
   final Uuid uuid = Uuid();
@@ -41,24 +20,26 @@ class QiniuUploader {
 
   QiniuUploader({this.domain = 'http://upload-z2.qiniup.com', this.token});
 
-  Future<void> formUpload(String fileKey, String filePath,
+  Future<FileInfo> formUpload(String fileKey, String filePath,
       {Map<String, String> params}) async {
     final FileInfo fileInfo = _generateFileInfo(filePath, fileKey);
     FormData formData = FormData();
     formData.add('file', UploadFileInfo(fileInfo.file, fileInfo.key));
     formData.add('key', fileInfo.key);
     formData.add('token', token);
-    formData = _handleParams(params, formData: formData);
+    if (params != null) formData = _handleParams(params, formData: formData);
     final response = await dio.post(domain, data: formData,
         onSendProgress: (int current, int total) {
       print('[formUpload] $current/$total');
     });
-    print('response => $response');
+    final String hash = response.data['hash'];
+    fileInfo.hash = hash;
+    return fileInfo;
   }
 
-  Future<void> resumeUpload(String fileKey, String filePath,
-      {Map<String, String> params}) async {
+  resumeUpload(String fileKey, String filePath, {Map<String, String> params}) {
     final FileInfo fileInfo = _generateFileInfo(filePath, fileKey);
+    final Completer completer = Completer();
 
     int readLen = 0;
     final List<int> readBuffers = [];
@@ -103,7 +84,9 @@ class QiniuUploader {
       }
       final String hash = response.data['hash'];
       fileInfo.hash = hash;
+      completer.complete(fileInfo);
     });
+    return completer.future;
   }
 
   FileInfo _generateFileInfo(String path, String fileKey) {
