@@ -19,8 +19,10 @@ Future<void> main(args) async {
   //     await qiniuUploader.formUpload('lexus-lx570.jpg', imagePath);
 
   final String videoPath = join(current, 'assets/screenrecord.mp4');
-  FileInfo fileInfo =
-      await qiniuUploader.resumeUpload('screenrecord.mp4', videoPath);
+  final FileInfo fileInfo = await qiniuUploader.resumeUpload(
+      'screenrecord.mp4', videoPath,
+      onSendProgress: (int current, int total) =>
+          print('current => $current total $total'));
 
   print(fileInfo.toJson());
 }

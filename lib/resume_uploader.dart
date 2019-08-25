@@ -21,30 +21,31 @@ class QiniuUploader {
   QiniuUploader({this.domain = 'http://upload-z2.qiniup.com', this.token});
 
   Future<FileInfo> formUpload(String fileKey, String filePath,
-      {Map<String, String> params}) async {
+      {Map<String, String> params, ProgressCallback onSendProgress}) async {
     final FileInfo fileInfo = _generateFileInfo(filePath, fileKey);
     FormData formData = FormData();
     formData.add('file', UploadFileInfo(fileInfo.file, fileInfo.key));
     formData.add('key', fileInfo.key);
     formData.add('token', token);
     if (params != null) formData = _handleParams(params, formData: formData);
-    final response = await dio.post(domain, data: formData,
-        onSendProgress: (int current, int total) {
-      print('[formUpload] $current/$total');
-    });
+    final response =
+        await dio.post(domain, data: formData, onSendProgress: onSendProgress);
     final String hash = response.data['hash'];
     fileInfo.hash = hash;
     return fileInfo;
   }
 
-  resumeUpload(String fileKey, String filePath, {Map<String, String> params}) {
+  resumeUpload(String fileKey, String filePath,
+      {Map<String, String> params, ProgressCallback onSendProgress}) {
     final FileInfo fileInfo = _generateFileInfo(filePath, fileKey);
     final Completer completer = Completer();
 
     int readLen = 0;
+    int currentBlock = 0;
     final List<int> readBuffers = [];
     final List<String> finishedCtxList = [];
     StreamSubscription streamSubscription;
+    final totalBlock = (fileInfo.size / BLOCK_SIZE).ceil();
 
     streamSubscription = fileInfo.file.openRead().listen((chunk) async {
       readLen += chunk.length;
@@ -74,6 +75,8 @@ class QiniuUploader {
           throw Exception('CRC32 no match.');
         }
         finishedCtxList.add(ctx);
+        currentBlock += 1;
+        onSendProgress(currentBlock, totalBlock);
         streamSubscription.resume();
       }
     }, onDone: () async {
