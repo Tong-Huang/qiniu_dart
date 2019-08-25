@@ -18,6 +18,8 @@ class FileInfo {
   String ext;
   String name;
   Map<String, String> params;
+  String hash;
+  String key;
 
   FileInfo({
     this.domain,
@@ -74,30 +76,21 @@ class QiniuUploader {
     print('| _ _ _ _ _ _ _ _ _ _ _ _ _');
 
     int readLen = 0;
-    int bufferLen = 0;
-    List<int> remainedData = [];
-    List<int> readBuffers = [];
+    final List<int> readBuffers = [];
     final List<String> finishedCtxList = [];
-    final List<String> finishedBlkPutRets = [];
     StreamSubscription streamSubscription;
 
     streamSubscription = fileInfo.file.openRead().listen((chunk) async {
       readLen += chunk.length;
-      bufferLen += chunk.length;
       readBuffers.addAll(chunk);
 
-      if (bufferLen >= BLOCK_SIZE || readLen == fileInfo.size) {
+      if (readBuffers.length >= BLOCK_SIZE || readLen == fileInfo.size) {
         streamSubscription.pause();
-        int blockSize = BLOCK_SIZE - remainedData.length;
-        blockSize = min(bufferLen, blockSize);
-        final List<int> buffersData = readBuffers.sublist(0, blockSize);
-        final List<int> postData = List<int>.from(remainedData);
-        postData.addAll(buffersData);
+        final int blockSize = min(readBuffers.length, BLOCK_SIZE);
+        final List<int> postData = readBuffers.sublist(0, blockSize);
 
         // something reset
-        remainedData = readBuffers.sublist(blockSize);
-        bufferLen = bufferLen - blockSize;
-        readBuffers = [];
+        readBuffers.removeRange(0, blockSize);
 
         final int bodyCrc32 = Crc32Zlib().convert(postData);
         final Response response = await _mkblk(domain, token, postData);
@@ -115,7 +108,6 @@ class QiniuUploader {
           throw Exception('CRC32 no match.');
         }
         finishedCtxList.add(ctx);
-        finishedBlkPutRets.add(jsonEncode(response.data));
         streamSubscription.resume();
       }
     }, onDone: () async {
@@ -125,7 +117,6 @@ class QiniuUploader {
         streamSubscription.cancel();
         throw Exception('No Response');
       }
-      finishedBlkPutRets.add(jsonEncode(response.data));
       print(response.data);
     });
   }
