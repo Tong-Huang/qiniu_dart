@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
-import 'package:http/http.dart' as http;
+import 'package:crclib/crclib.dart';
 import 'package:dio/dio.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart';
@@ -64,6 +65,9 @@ class QiniuUploader {
     int finishedBlock = 0;
     List<int> remainedData = [];
     List<int> readBuffers = [];
+    final List<String> finishedCtxList = [];
+    final List<String> finishedBlkPutRets = [];
+
     StreamSubscription streamSubscription;
     const int BLOCK_SIZE = 4 * 1024 * 1024; //4MB, never change
     streamSubscription = file.openRead().listen((chunk) async {
@@ -71,9 +75,10 @@ class QiniuUploader {
       bufferLen += chunk.length;
       readBuffers.addAll(chunk);
 
-      if (bufferLen >= BLOCK_SIZE - 1 || readLen == fileSize) {
+      if (bufferLen >= BLOCK_SIZE || readLen == fileSize) {
         streamSubscription.pause();
-        final int blockSize = BLOCK_SIZE - remainedData.length;
+        int blockSize = BLOCK_SIZE - remainedData.length;
+        blockSize = min(bufferLen, blockSize);
         final List<int> buffersData = readBuffers.sublist(0, blockSize);
         final List<int> postData = List<int>.from(remainedData);
         postData.addAll(buffersData);
@@ -85,35 +90,83 @@ class QiniuUploader {
 
         currentBlock += 1;
 
-        await _mkblk(domain, token, postData);
+        final int bodyCrc32 = Crc32Zlib().convert(postData);
+        final Response response = await _mkblk(domain, token, postData);
 
-        // streamSubscription.resume();
-        streamSubscription.cancel();
+        if (response == null) {
+          streamSubscription.cancel();
+          throw Exception('No Response');
+        }
+
+        final String ctx = response.data['ctx'];
+        final int crc32 = response.data['crc32'];
+
+        if (crc32 != bodyCrc32) {
+          streamSubscription.cancel();
+          throw Exception('CRC32 no match.');
+        }
+
+        finishedBlock += 1;
+        finishedCtxList.add(ctx);
+        finishedBlkPutRets.add(jsonEncode(response.data));
+        streamSubscription.resume();
       }
-    }, onDone: () {
+    }, onDone: () async {
       print('finish read file size => $bufferLen');
-      streamSubscription.cancel();
+      // TODO(thuang): check remain buffer and buffer, deal with more than block size case.
+
+      // streamSubscription.cancel();
+      await _mkfile(domain, token, fileSize, finishedCtxList, key);
     });
   }
 
-  Future<void> _mkblk(String domain, String token, List<int> data) async {
+  Future<Response> _mkblk(String domain, String token, List<int> data) async {
     try {
       final String url = '$domain/mkblk/${data.length}';
       final String auth = 'UpToken $token';
       final headers = {
         'Authorization': auth,
         'Content-Type': 'application/octet-stream',
-        'Connection': 'keep-alive'
+        'Connection': 'keep-alive',
+        HttpHeaders.contentLengthHeader: data.length
       };
-      // final Response response =
-      //     await dio.post(url, data: data, options: Options(headers: headers));
-      // return response;
-
-      final response = await http.post(url, body: data, headers: headers);
-
-      print(jsonEncode(response.body));
+      final Response response = await dio.post(url,
+          data: Stream.fromIterable(data.map((e) => [e])),
+          options: Options(headers: headers));
+      return response;
     } on DioError catch (e) {
-      print(e);
+      print(jsonEncode(e));
+      return null;
     }
+  }
+
+  Future<Response> _mkfile(String domain, String token, int fileSize,
+      List<String> ctxList, String key) async {
+    try {
+      String url = '$domain/mkfile/$fileSize';
+      url += '/key/' + _urlsafeBase64Encode(key);
+      final String auth = 'UpToken $token';
+      final String postBody = ctxList.join(',');
+      final headers = {
+        'Authorization': auth,
+        'Content-Type': 'application/octet-stream',
+        'Connection': 'keep-alive',
+        HttpHeaders.contentLengthHeader: postBody.length
+      };
+      final Response response = await dio.post(url,
+          data: postBody, options: Options(headers: headers));
+      return response;
+    } on DioError catch (e) {
+      print(jsonEncode(e));
+      return null;
+    }
+  }
+
+  String _urlsafeBase64Encode(String str) {
+    final List<int> bytes = utf8.encode(str);
+    final String base64Str = base64.encode(bytes);
+    return base64Str
+        .replaceAll(RegExp(r'\/'), '_')
+        .replaceAll(RegExp(r'\+'), '-');
   }
 }

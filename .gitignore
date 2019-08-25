@@ -8,3 +8,6 @@ env.yaml
 # ignore .dart_tool .packages
 .dart_tool
 .packages
+
+# .DS_Store
+.DS_Store
