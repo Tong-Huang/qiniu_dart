@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -42,7 +43,38 @@ class QiniuUploader {
     final File file = File(filePath);
     if (!file.existsSync())
       throw Exception('[QiniuUploader] putFile() file no exists');
+    final int fileSize = file.lengthSync();
+    final String mimeType = lookupMimeType(filePath);
+    final String ext = extension(filePath);
+    final String fileName = uuid.v4() + ext;
 
-    // file.openRead().listen((data) => print(data));
+    print('| path => $filePath');
+    print('| size => $fileSize');
+    print('| mime => $mimeType');
+    print('| name => $fileName');
+    print('| key => $key');
+    print('| _ _ _ _ _ _ _ _ _ _ _ _ _');
+
+    int readLen = 0;
+    int bufferLen = 0;
+    StreamSubscription streamSubscription;
+    const int BLOCK_SIZE = 4 * 1024 * 1024; //4MB, never change
+    streamSubscription = file.openRead().listen((chunk) async {
+      readLen += chunk.length;
+      bufferLen += chunk.length;
+
+      if (bufferLen >= BLOCK_SIZE || readLen == fileSize) {
+        streamSubscription.pause();
+
+        print('begin wait => ${DateTime.now()}');
+        await Future.delayed(Duration(seconds: 5));
+        print('finish wait => ${DateTime.now()}');
+
+        streamSubscription.resume();
+      }
+    }, onDone: () {
+      print('finish read file size');
+      streamSubscription.cancel();
+    });
   }
 }
